@@ -122,31 +122,3 @@ pip install -r requirements.txt
 export FLASK_APP=app.py
 python -m flask run --host=0.0.0.0 --port=5001
 ```
-
-## Docker Deployment
-
-# Dockerfile
-Create a file named `Dockerfile` with the following content:
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-
-COPY . .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
-EXPOSE 5001
-
-ENV FLASK_APP=app.py
-
-CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=5001"]
-```
-# docker commands
-```bash
-# Build the Docker image
-docker build -t flask-resume-app .
-
-# Run the container
-docker run -d -p 5001:5001 flask-resume-app
-```
