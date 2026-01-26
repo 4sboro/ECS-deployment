@@ -1,55 +1,109 @@
 
-name: Deploy to Amazon ECS
+name: Build, Test, and Deploy to Amazon ECS
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   AWS_REGION: ${{ secrets.REGION }}
   ECR_REPOSITORY: ${{ secrets.ECR_REPO }}
   ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
   ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-  CONTAINER_NAME: ${{ secrets.CONTAIER }}   # Fixed typo
+  CONTAINER_NAME: ${{ secrets.CONTAIER }}
 
 permissions:
   contents: read
 
 jobs:
-  deploy:
-    name: Deploy
+  build:
+    name: Build Docker Image
     runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Build image
+        run: |
+          docker build -t test-image:${{ steps.meta.outputs.tag }} .
+
+  test:
+    name: Test Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Load image tag
+        run: echo "IMAGE_TAG=${{ needs.build.outputs.image_tag }}" >> $GITHUB_ENV
+
+      - name: Build image again (isolated job)
+        run: |
+          docker build -t test-image:$IMAGE_TAG .
+
+      - name: Run tests inside container
+        run: |
+          docker run --rm test-image:$IMAGE_TAG
+
+  push:
+    name: Push Image to ECR
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.SECRET_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image for push
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+      - name: Push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: push
     environment: production
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.SECRET_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.ACCESS_KEY }}
-        aws-secret-access-key: ${{ secrets.SECRET_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
-
-    - name: Build, tag, and push image to Amazon ECR
-      id: build-image
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        IMAGE_TAG: ${{ github.sha }}
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-
-    - name: Deploy ECS service
-      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-      with:
-        task-definition: nginx-task:7   # your existing task definition revision
-        cluster: ${{ env.ECS_CLUSTER }}
-        service: ${{ env.ECS_SERVICE }}
-        wait-for-service-stability: true
+      - name: Deploy ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: nginx-task:7
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
