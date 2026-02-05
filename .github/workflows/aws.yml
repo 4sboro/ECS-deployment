@@ -3,7 +3,7 @@ name: Build, Test, and Deploy to Amazon ECS
 
 on:
   push:
-    branches: ["main"]
+    branches: "main"
 
 env:
   AWS_REGION: ${{ secrets.REGION }}
